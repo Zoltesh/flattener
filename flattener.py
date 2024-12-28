@@ -17,7 +17,7 @@ def identify_id_column(df):
     # If no ID column found, use the first column
     return df.columns[0]
 
-def flatten_nested_json(df, parent_id_col='id', prefix='', source_file='', temp_dir='temp', parent_table=''):
+def flatten_nested_json(df, parent_id_col='id', prefix='', source_file='', temp_dir='temp', parent_table='', output_dir=''):
     """
     Recursively flatten nested JSON arrays in a dataframe and save as separate parquet files.
     
@@ -28,8 +28,10 @@ def flatten_nested_json(df, parent_id_col='id', prefix='', source_file='', temp_
         source_file: Original source file name for prefix generation
         temp_dir: Directory for temporary files
         parent_table: Name of the parent table for reference
+        output_dir: Directory where output files should be saved
     """
-    # Create temp directory if it doesn't exist
+    # Create temp directory if it doesn't exist (as subdirectory of output_dir)
+    temp_dir = os.path.join(output_dir, temp_dir)
     os.makedirs(temp_dir, exist_ok=True)
     
     # Generate base prefix from source file if not provided
@@ -94,21 +96,22 @@ def flatten_nested_json(df, parent_id_col='id', prefix='', source_file='', temp_
                             prefix=f"{prefix}{column}_",
                             source_file=source_file,
                             temp_dir=temp_dir,
-                            parent_table=current_table
+                            parent_table=current_table,
+                            output_dir=output_dir
                         )
                         
                         # If nested data was further flattened
                         if sub_files:
                             created_files.extend(sub_files)
                             # Save flattened version
-                            output_file = f"{prefix}{column}_flattened.parquet"
+                            output_file = os.path.join(output_dir, f"{prefix}{column}_flattened.parquet")
                             sub_clean_df.to_parquet(output_file, index=False)
                             created_files.append(output_file)
                             # Remove temporary file
                             os.remove(temp_file)
                         else:
                             # If no further flattening needed
-                            output_file = f"{prefix}{column}.parquet"
+                            output_file = os.path.join(output_dir, f"{prefix}{column}.parquet")
                             os.rename(temp_file, output_file)
                             created_files.append(output_file)
                         
@@ -124,8 +127,11 @@ def flatten_nested_json(df, parent_id_col='id', prefix='', source_file='', temp_
 
 def main():
     # Read the input parquet file
-    input_file = "data/orders/orders.parquet"
-    source_filename = input_file.split('/')[-1]
+    input_file = "data/warehouses/warehouses.parquet"
+    
+    # Get the directory and filename from the input path
+    output_dir = os.path.dirname(input_file)
+    source_filename = os.path.basename(input_file)
     temp_dir = "temp_parquet_files"
     
     try:
@@ -137,11 +143,12 @@ def main():
         clean_df, created_files = flatten_nested_json(
             df, 
             source_file=source_filename,
-            temp_dir=temp_dir
+            temp_dir=temp_dir,
+            output_dir=output_dir
         )
         
         # Save the flattened main file
-        output_file = f"{source_filename.replace('.parquet', '')}_flattened.parquet"
+        output_file = os.path.join(output_dir, f"{source_filename.replace('.parquet', '')}_flattened.parquet")
         clean_df.to_parquet(output_file, index=False)
         print(f"Successfully created {output_file}")
         print("Created additional files:")
