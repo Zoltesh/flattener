@@ -64,8 +64,8 @@ def flatten_parquet(input_parquet: str, parent_name: str, identifier: str) -> No
                     has_scalar_values = True
             
             if has_scalar_values:
-                # Generate a unique ID for this record if it contains an ID field
-                record_id = obj.get('id') or obj.get(f'{table_name}_id') or len(flattened_data[table_name])
+                # Generate a unique ID for this record
+                record_id = str(obj.get('id', '')) or str(obj.get(f'{table_name}_id', '')) or str(len(flattened_data[table_name]))
                 row_data['id'] = record_id
                 flattened_data[table_name].append(row_data)
                 
@@ -73,6 +73,11 @@ def flatten_parquet(input_parquet: str, parent_name: str, identifier: str) -> No
                 for key, value in nested_items.items():
                     process_nested(value, parent_keys + [key], record_id)
             
+            elif nested_items:  # Process nested items even if no scalar values
+                record_id = parent_id
+                for key, value in nested_items.items():
+                    process_nested(value, parent_keys + [key], record_id)
+                
         elif isinstance(obj, list):
             # Handle list of objects
             table_name = "_".join(parent_keys)
@@ -95,11 +100,11 @@ def flatten_parquet(input_parquet: str, parent_name: str, identifier: str) -> No
                         else:
                             row_data[key] = value
                     
-                    # Store the current row_data (without nested structures)
+                    # Store the current row_data
                     flattened_data[table_name].append(row_data)
                     
-                    # Process nested structures with appropriate ID
-                    item_id = item.get('id') or item.get(f'{table_name}_id') or f"{parent_id}_{i}"
+                    # Process nested structures
+                    item_id = str(item.get('id', '')) or str(item.get(f'{table_name}_id', '')) or f"{parent_id}_{i}"
                     for key, value in nested_items.items():
                         process_nested(value, parent_keys + [key], item_id)
                 else:
@@ -115,8 +120,12 @@ def flatten_parquet(input_parquet: str, parent_name: str, identifier: str) -> No
         parent_id = row[identifier]
         try:
             for column_name, value in row.items():
-                if pd.notna(value):  # Skip None/NaN values
-                    process_nested(value, [column_name], parent_id)
+                # Handle Series objects directly
+                if isinstance(value, pd.Series):
+                    value = value.iloc[0]
+                
+                # Process the value without null checks
+                process_nested(value, [column_name], parent_id)
         except Exception as e:
             print(f"Error processing row {idx}: {e}")
             continue
