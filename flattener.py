@@ -25,8 +25,10 @@ def flatten_parquet(input_parquet: str, parent_name: str, identifier: str) -> No
 
     # Initialize a dictionary to store flattened data
     flattened_data: Dict[str, List[Dict[str, Any]]] = {}
+    # Track columns that contain nested data
+    nested_columns = set()
 
-    def process_nested(obj: Any, parent_keys: List[str], parent_id: Any) -> None:
+    def process_nested(obj: Any, parent_keys: List[str], parent_id: Any, original_id: Any = None) -> None:
         """
         Recursively processes a nested object.
         
@@ -34,7 +36,12 @@ def flatten_parquet(input_parquet: str, parent_name: str, identifier: str) -> No
         - obj: The current object (could be a dict, list, or scalar).
         - parent_keys: A list of keys representing the current hierarchy.
         - parent_id: The identifier value from the parent object.
+        - original_id: The original top-level order ID to maintain throughout
         """
+        # Set original_id on first call
+        if original_id is None:
+            original_id = parent_id
+
         # Handle JSON strings
         if isinstance(obj, str):
             try:
@@ -51,7 +58,7 @@ def flatten_parquet(input_parquet: str, parent_name: str, identifier: str) -> No
                 flattened_data[table_name] = []
             
             # Add all scalar values to this table
-            row_data = {f"{parent_name}_{identifier}": parent_id}
+            row_data = {f"{parent_name}_{identifier}": original_id}  # Use original_id here
             has_scalar_values = False
             nested_items = {}
             
@@ -71,12 +78,12 @@ def flatten_parquet(input_parquet: str, parent_name: str, identifier: str) -> No
                 
                 # Process nested items with the current record's ID
                 for key, value in nested_items.items():
-                    process_nested(value, parent_keys + [key], record_id)
+                    process_nested(value, parent_keys + [key], record_id, original_id)
             
             elif nested_items:  # Process nested items even if no scalar values
                 record_id = parent_id
                 for key, value in nested_items.items():
-                    process_nested(value, parent_keys + [key], record_id)
+                    process_nested(value, parent_keys + [key], record_id, original_id)
                 
         elif isinstance(obj, list):
             # Handle list of objects
@@ -88,7 +95,7 @@ def flatten_parquet(input_parquet: str, parent_name: str, identifier: str) -> No
                 if isinstance(item, dict):
                     # Add parent reference and index
                     row_data = {
-                        f"{parent_name}_{identifier}": parent_id,
+                        f"{parent_name}_{identifier}": original_id,  # Use original_id here
                         "index": i
                     }
                     
@@ -106,14 +113,18 @@ def flatten_parquet(input_parquet: str, parent_name: str, identifier: str) -> No
                     # Process nested structures
                     item_id = str(item.get('id', '')) or str(item.get(f'{table_name}_id', '')) or f"{parent_id}_{i}"
                     for key, value in nested_items.items():
-                        process_nested(value, parent_keys + [key], item_id)
+                        process_nested(value, parent_keys + [key], item_id, original_id)
                 else:
                     # Handle scalar values in lists
                     flattened_data[table_name].append({
-                        f"{parent_name}_{identifier}": parent_id,
+                        f"{parent_name}_{identifier}": original_id,  # Use original_id here
                         "index": i,
                         "value": item
                     })
+
+        # Track nested columns (keep this part)
+        if len(parent_keys) == 1 and isinstance(obj, (dict, list)):
+            nested_columns.add(parent_keys[0])
 
     # Process each row in the input dataframe
     for idx, row in df.iterrows():
@@ -135,7 +146,7 @@ def flatten_parquet(input_parquet: str, parent_name: str, identifier: str) -> No
     output_dir = os.path.join(input_dir, f"{parent_name}_flattened")
     os.makedirs(output_dir, exist_ok=True)
 
-    # Convert flattened data to DataFrames and save as Parquet
+    # First save all the nested structure files
     for table_name, rows in flattened_data.items():
         if rows:  # Skip if no data
             try:
@@ -145,6 +156,16 @@ def flatten_parquet(input_parquet: str, parent_name: str, identifier: str) -> No
                 print(f"Saved: {output_path}")
             except Exception as e:
                 print(f"Error saving table {table_name}: {e}")
+
+    # Finally, create and save the flattened main file
+    try:
+        # Remove nested columns from the main DataFrame
+        flattened_df = df.drop(columns=list(nested_columns))
+        output_path = os.path.join(output_dir, f"{parent_name}_flattened.parquet")
+        flattened_df.to_parquet(output_path, index=False)
+        print(f"Saved flattened main file: {output_path}")
+    except Exception as e:
+        print(f"Error saving flattened main file: {e}")
 
 if __name__ == "__main__":
     # Example usage
